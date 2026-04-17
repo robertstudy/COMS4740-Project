@@ -1,16 +1,3 @@
-"""
-Remap YOLO label class ids from 52 suit-specific classes to 13 rank-only classes (blackjack).
-
-Expects Roboflow-style names like Ac, 10h (rank + single-letter suit).
-Backs up original labels to train|valid|test/labels_suit/ once, then overwrites labels/.
-Writes data_blackjack.yaml with nc:13 and names in rank order.
-
-Usage:
-  python remap_labels_blackjack.py --dataset-dir training_data
-Then train with:
-  python train_yolo.py --dataset-dir training_data --data-yaml data_blackjack.yaml ...
-"""
-
 from __future__ import annotations
 
 import argparse

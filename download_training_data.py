@@ -75,6 +75,5 @@ def main() -> None:
     ensure_kaggle_config(project_root)
     download_and_extract(args.dataset, project_root / args.out)
 
-
 if __name__ == "__main__":
     main()

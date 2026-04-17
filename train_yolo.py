@@ -6,7 +6,6 @@ from ultralytics import YOLO
 
 # python train_yolo.py --device 0 --batch 4 
 
-
 def load_class_names(data_yaml_path: Path) -> list[str]:
     """Read class names from existing dataset YAML."""
     if not data_yaml_path.exists():
@@ -19,7 +18,6 @@ def load_class_names(data_yaml_path: Path) -> list[str]:
     if not names or not isinstance(names, list):
         raise ValueError("Could not read class names from dataset data.yaml")
     return names
-
 
 def write_training_yaml(dataset_dir: Path, names: list[str]) -> Path:
     """Create a stable YAML with absolute paths for YOLO training."""
@@ -50,11 +48,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train YOLO on playing card dataset")
     parser.add_argument("--dataset-dir", default="training_data", help="Dataset folder")
     parser.add_argument(
-        "--data-yaml",
-        default="data.yaml",
-        help="Class list YAML inside dataset dir (e.g. data.yaml or data_blackjack.yaml)",
-    )
-    parser.add_argument(
         "--model",
         default="yolov8n.pt",
         help="YOLO checkpoint to start from (e.g., yolov8n.pt, yolov8s.pt)",
@@ -68,7 +61,7 @@ def main() -> None:
     project_root = Path(__file__).resolve().parent
     dataset_dir = (project_root / args.dataset_dir).resolve()
 
-    source_yaml = dataset_dir / args.data_yaml
+    source_yaml = dataset_dir / "data_local.yaml"
     names = load_class_names(source_yaml)
     local_yaml = write_training_yaml(dataset_dir, names)
 
@@ -85,10 +78,10 @@ def main() -> None:
         name="playing_cards_yolo",
         exist_ok=True,
         device=args.device,
+        workers=0
     )
 
     print("Training complete. Check runs/playing_cards_yolo for outputs.")
-
 
 if __name__ == "__main__":
     main()
