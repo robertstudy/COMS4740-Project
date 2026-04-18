@@ -56,6 +56,11 @@ def main() -> None:
     parser.add_argument("--imgsz", type=int, default=640, help="Image size")
     parser.add_argument("--batch", type=int, default=16, help="Batch size")
     parser.add_argument("--device", default=None, help="Device: 0, cpu, etc.")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume interrupted training run from checkpoint state.",
+    )
     args = parser.parse_args()
 
     project_root = Path(__file__).resolve().parent
@@ -78,7 +83,8 @@ def main() -> None:
         name="playing_cards_yolo",
         exist_ok=True,
         device=args.device,
-        workers=0
+        workers=0,
+        resume=args.resume,
     )
 
     print("Training complete. Check runs/playing_cards_yolo for outputs.")
