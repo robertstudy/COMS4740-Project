@@ -110,6 +110,17 @@ def big_box_from_pair(
     y2 = max(0, min(frame_h - 1, y2))
     return x1, y1, x2, y2
 
+def create_player_box(
+        track_ids: set[int], memory_tracks: List[MemoryTrack], frame_shape: Tuple[int, int, int]
+) -> Tuple[int, int, int, int]:
+    x1, y1, x2, y2 = frame_shape[1], frame_shape[0], 0, 0
+    for track_id in track_ids:
+        card = memory_tracks[track_id]
+        x1 = min(x1, card.bbox[0])
+        y1 = min(y1, card.bbox[1])
+        x2 = max(x2, card.bbox[2])
+        y2 = max(y2, card.bbox[3])
+    return x1, y1, x2, y2
 
 def pair_same_class_boxes(corners: List[CornerDetection]) -> List[Tuple[CornerDetection, CornerDetection]]:
     by_class: Dict[int, List[CornerDetection]] = {}
@@ -396,8 +407,6 @@ def main() -> None:
                             stack.extend(adj[card])
                     players.append(hand)
 
-            print(players)
-
             if not args.no_show:
                 annotated = frame.copy()
                 for det in corners:
@@ -420,6 +429,22 @@ def main() -> None:
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.55,
                         color,
+                        2,
+                        cv2.LINE_AA,
+                    )
+
+                for pi in range(len(players)):
+                    player = players[pi]
+                    x1, y1, x2, y2 = create_player_box(player, memory_tracks, frame.shape)
+                    margin = 30
+                    cv2.rectangle(annotated, (x1 - margin, y1 - margin), (x2 + margin, y2 + margin), (0, 0, 255), 2)
+                    cv2.putText(
+                        annotated,
+                        f"Player {pi + 1}",
+                        (x1, max(20, y1 - (margin + 8))),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.55,
+                        (0, 0, 255),
                         2,
                         cv2.LINE_AA,
                     )
