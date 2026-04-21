@@ -138,11 +138,12 @@ def card_value_from_label(label: str) -> int:
     return int(rank)
 
 
-def draw_count_panel(frame, values: List[int]) -> None:
+def draw_count_panel(frame, values: List[int], players: List[set[int]]) -> None:
     tuple_text = "(" + ",".join(str(v) for v in values) + ")" if values else "()"
     total_text = f"Running Total: {sum(values)}"
     values_text = f"Cards: {tuple_text}"
-    lines = [values_text, total_text]
+    players_text = f"Players: {len(players)}"
+    lines = [values_text, total_text, players_text]
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = 0.62
@@ -277,6 +278,7 @@ def main() -> None:
     )
     print("Press 'q' in the preview window to quit.\n")
     memory_tracks: Dict[int, MemoryTrack] = {}
+    players: List[set[int]] = []
 
     try:
         while True:
@@ -367,6 +369,35 @@ def main() -> None:
                 if mem.missing_frames > args.memory_frames:
                     del memory_tracks[track_id]
 
+            # Group overlapping cards as different players
+            players.clear()
+            track_ids = list(memory_tracks.keys())
+            adj = {tid: [] for tid in track_ids}
+
+            for i in range(len(track_ids)):
+                for j in range(len(track_ids)):
+                    id1, id2 = track_ids[i], track_ids[j]
+                    if box_intersects(memory_tracks[id1].bbox, memory_tracks[id2].bbox):
+                        adj[id1].append(id2)
+                        adj[id2].append(id1)
+            
+            visited = set()
+
+            for track_id in track_ids:
+                if track_id not in visited:
+                    hand = set()
+                    stack = [track_id]
+
+                    while stack:
+                        card = stack.pop()
+                        if card not in visited:
+                            visited.add(card)
+                            hand.add(card)
+                            stack.extend(adj[card])
+                    players.append(hand)
+
+            print(players)
+
             if not args.no_show:
                 annotated = frame.copy()
                 for det in corners:
@@ -398,7 +429,7 @@ def main() -> None:
                     for _, mem in sorted(memory_tracks.items(), key=lambda item: item[0])
                 ]
                 active_values = [v for v in active_values if v > 0]
-                draw_count_panel(annotated, active_values)
+                draw_count_panel(annotated, active_values, players)
 
                 cv2.imshow("Playing Card Big Box + DeepSORT", annotated)
                 if (cv2.waitKey(1) & 0xFF) == ord("q"):
