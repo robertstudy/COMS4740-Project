@@ -454,7 +454,7 @@ def main() -> None:
             # Update HiLo count
             for tid in track_ids:
                 mem = memory_tracks[tid]
-                if tid not in counted_ids and not mem.occluded:
+                if tid not in counted_ids:
                     rank = get_rank(mem.label)
                     if rank:
                         running_hilo_count += HILO_VALUES.get(rank, 0)
