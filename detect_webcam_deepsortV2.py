@@ -136,25 +136,93 @@ def pair_same_class_boxes(corners: List[CornerDetection]) -> List[Tuple[CornerDe
     return pairs
 
 
-def card_value_from_label(label: str) -> int:
+# HiLo Values
+HILO_VALUES = {
+    "2": 1, "3": 1, "4": 1, "5": 1, "6": 1,
+    "7": 0, "8": 0, "9": 0,
+    "10": -1, "J": -1, "Q": -1, "K": -1, "A": -1
+}
+
+def get_rank(label: str) -> str:
     clean = label.strip().upper()
     match = re.match(r"^(10|[2-9]|[AJQK])", clean)
-    if not match:
-        return 0
-    rank = match.group(1)
-    if rank in {"J", "Q", "K"}:
-        return 10
-    if rank == "A":
-        return 1
-    return int(rank)
+    return match.group(1) if match else ""
 
+def calculate_hand_value(ranks: List[str]) -> Tuple[int, bool]:
+    value = 0
+    aces = 0
+    for r in ranks:
+        if r in {"J", "Q", "K", "10"}:
+            value += 10
+        elif r == "A":
+            aces += 1
+            value += 11
+        else:
+            value += int(r)
+    
+    while value > 21 and aces > 0:
+        value -= 10
+        aces -= 1
+    
+    return value, (aces > 0)
 
-def draw_count_panel(frame, values: List[int], players: List[set[int]]) -> None:
-    tuple_text = "(" + ",".join(str(v) for v in values) + ")" if values else "()"
-    total_text = f"Running Total: {sum(values)}"
-    values_text = f"Cards: {tuple_text}"
-    players_text = f"Players: {len(players)}"
-    lines = [values_text, total_text, players_text]
+def get_optimal_action(player_total: int, is_soft: bool, dealer_rank: str, running_count: int) -> str:
+    if not dealer_rank:
+        return "WAIT"
+    
+    # Convert dealer_rank to value (A=11)
+    if dealer_rank in {"J", "Q", "K", "10"}:
+        dv = 10
+    elif dealer_rank == "A":
+        dv = 11
+    else:
+        dv = int(dealer_rank)
+
+    # Illustrious 18 & common deviations for single deck
+    if dealer_rank == "A" and running_count >= 3:
+        return "INSURANCE" # Technically insurance, but we'll flag it
+
+    # 16 vs 10
+    if player_total == 16 and dv == 10:
+        if running_count >= 0: return "STAND"
+        return "SURRENDER"
+    
+    # 15 vs 10
+    if player_total == 15 and dv == 10:
+        if running_count >= 4: return "STAND"
+        return "SURRENDER"
+
+    if not is_soft:
+        if player_total <= 8: return "HIT"
+        if player_total == 9:
+            return "DOUBLE" if 2 <= dv <= 6 else "HIT"
+        if player_total == 10:
+            return "DOUBLE" if 2 <= dv <= 9 else "HIT"
+        if player_total == 11:
+            return "DOUBLE"
+        if player_total == 12:
+            return "STAND" if 4 <= dv <= 6 else "HIT"
+        if 13 <= player_total <= 16:
+            if player_total == 16 and dv >= 9: return "SURRENDER"
+            if player_total == 15 and dv == 10: return "SURRENDER"
+            return "STAND" if 2 <= dv <= 6 else "HIT"
+        return "STAND"
+    else: # Soft totals
+        if player_total <= 17: # A,2 to A,6
+            return "DOUBLE" if 3 <= dv <= 6 else "HIT"
+        if player_total == 18: # A,7
+            if dv <= 6: return "DOUBLE"
+            if dv <= 8: return "STAND"
+            return "HIT"
+        return "STAND"
+
+def draw_count_panel(frame, running_count: int, num_players: int) -> None:
+    lines = [
+        f"HiLo Running Count: {running_count}",
+        f"Players Detected: {num_players}",
+        "Press 'r' to reset count",
+        "Press 'q' to quit"
+    ]
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = 0.62
@@ -290,6 +358,9 @@ def main() -> None:
     print("Press 'q' in the preview window to quit.\n")
     memory_tracks: Dict[int, MemoryTrack] = {}
     players: List[set[int]] = []
+    
+    running_hilo_count = 0
+    counted_ids = set()
 
     try:
         while True:
@@ -380,6 +451,15 @@ def main() -> None:
                 if mem.missing_frames > args.memory_frames:
                     del memory_tracks[track_id]
 
+            # Update HiLo count
+            for tid in track_ids:
+                mem = memory_tracks[tid]
+                if tid not in counted_ids and not mem.occluded:
+                    rank = get_rank(mem.label)
+                    if rank:
+                        running_hilo_count += HILO_VALUES.get(rank, 0)
+                        counted_ids.add(tid)
+
             # Group overlapping cards as different players
             players.clear()
             track_ids = list(memory_tracks.keys())
@@ -407,6 +487,21 @@ def main() -> None:
                             stack.extend(adj[card])
                     players.append(hand)
 
+            # Identify Dealer (top-most hand)
+            players_with_y = []
+            for p_set in players:
+                y_min = min(memory_tracks[tid].bbox[1] for tid in p_set)
+                players_with_y.append((y_min, p_set))
+            
+            players_with_y.sort()
+            sorted_hands = [p[1] for p in players_with_y]
+            
+            dealer_hand = sorted_hands[0] if sorted_hands else None
+            dealer_upcard_rank = ""
+            if dealer_hand:
+                # Use the first card in the dealer's hand as the upcard
+                dealer_upcard_rank = get_rank(memory_tracks[list(dealer_hand)[0]].label)
+
             if not args.no_show:
                 annotated = frame.copy()
                 for det in corners:
@@ -433,35 +528,55 @@ def main() -> None:
                         cv2.LINE_AA,
                     )
 
-                for pi in range(len(players)):
-                    player = players[pi]
-                    x1, y1, x2, y2 = create_player_box(player, memory_tracks, frame.shape)
-                    count = 0
-                    for card in player:
-                        count += card_value_from_label(memory_tracks[card].label)
+                for pi, player_set in enumerate(sorted_hands):
+                    is_dealer = (player_set == dealer_hand)
+                    x1, y1, x2, y2 = create_player_box(player_set, memory_tracks, frame.shape)
+                    
+                    hand_ranks = [get_rank(memory_tracks[tid].label) for tid in player_set]
+                    hand_val, is_soft = calculate_hand_value(hand_ranks)
+                    
+                    label_prefix = "Dealer" if is_dealer else f"Player {pi}"
+                    display_text = f"{label_prefix}: {hand_val}"
+                    if is_soft and hand_val < 21:
+                        display_text += " (Soft)"
+                    
                     margin = 30
-                    cv2.rectangle(annotated, (x1 - margin, y1 - margin), (x2 + margin, y2 + margin), (0, 0, 255), 2)
+                    color = (255, 0, 0) if is_dealer else (0, 0, 255)
+                    cv2.rectangle(annotated, (x1 - margin, y1 - margin), (x2 + margin, y2 + margin), color, 2)
                     cv2.putText(
                         annotated,
-                        f"Player {pi + 1}: {count}",
+                        display_text,
                         (x1, max(20, y1 - (margin + 8))),
                         cv2.FONT_HERSHEY_SIMPLEX,
-                        0.55,
-                        (0, 0, 255),
+                        0.65,
+                        color,
                         2,
                         cv2.LINE_AA,
                     )
 
-                active_values = [
-                    card_value_from_label(mem.label)
-                    for _, mem in sorted(memory_tracks.items(), key=lambda item: item[0])
-                ]
-                active_values = [v for v in active_values if v > 0]
-                draw_count_panel(annotated, active_values, players)
+                    # Strategy Advice
+                    if not is_dealer and dealer_upcard_rank:
+                        advice = get_optimal_action(hand_val, is_soft, dealer_upcard_rank, running_hilo_count)
+                        cv2.putText(
+                            annotated,
+                            f"Advice: {advice}",
+                            (x1, y2 + margin + 25),
+                            cv2.FONT_HERSHEY_SIMPLEX,
+                            0.7,
+                            (0, 255, 255),
+                            2,
+                            cv2.LINE_AA,
+                        )
 
-                cv2.imshow("Playing Card Big Box + DeepSORT", annotated)
-                if (cv2.waitKey(1) & 0xFF) == ord("q"):
+                draw_count_panel(annotated, running_hilo_count, len(sorted_hands))
+
+                cv2.imshow("Blackjack HiLo & Strategy Bot", annotated)
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
                     break
+                elif key == ord("r"):
+                    running_hilo_count = 0
+                    counted_ids.clear()
     except KeyboardInterrupt:
         print("\nStopped.")
     except Exception as e:
