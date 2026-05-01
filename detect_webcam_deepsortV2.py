@@ -436,11 +436,14 @@ def main() -> None:
                 for pi in range(len(players)):
                     player = players[pi]
                     x1, y1, x2, y2 = create_player_box(player, memory_tracks, frame.shape)
+                    count = 0
+                    for card in player:
+                        count += card_value_from_label(memory_tracks[card].label)
                     margin = 30
                     cv2.rectangle(annotated, (x1 - margin, y1 - margin), (x2 + margin, y2 + margin), (0, 0, 255), 2)
                     cv2.putText(
                         annotated,
-                        f"Player {pi + 1}",
+                        f"Player {pi + 1}: {count}",
                         (x1, max(20, y1 - (margin + 8))),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.55,
