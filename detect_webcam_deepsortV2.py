@@ -451,15 +451,6 @@ def main() -> None:
                 if mem.missing_frames > args.memory_frames:
                     del memory_tracks[track_id]
 
-            # Update HiLo count
-            for tid in track_ids:
-                mem = memory_tracks[tid]
-                if tid not in counted_ids:
-                    rank = get_rank(mem.label)
-                    if rank:
-                        running_hilo_count += HILO_VALUES.get(rank, 0)
-                        counted_ids.add(tid)
-
             # Group overlapping cards as different players
             players.clear()
             track_ids = list(memory_tracks.keys())
@@ -486,6 +477,15 @@ def main() -> None:
                             hand.add(card)
                             stack.extend(adj[card])
                     players.append(hand)
+
+            # Update HiLo count
+            for tid in track_ids:
+                mem = memory_tracks[tid]
+                if tid not in counted_ids:
+                    rank = get_rank(mem.label)
+                    if rank:
+                        running_hilo_count += HILO_VALUES.get(rank, 0)
+                        counted_ids.add(tid)
 
             # Identify Dealer (top-most hand)
             players_with_y = []
