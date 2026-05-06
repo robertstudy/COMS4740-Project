@@ -166,7 +166,7 @@ def calculate_hand_value(ranks: List[str]) -> Tuple[int, bool]:
     
     return value, (aces > 0)
 
-def get_optimal_action(player_total: int, is_soft: bool, dealer_rank: str, running_count: int) -> str:
+def get_optimal_action(player_total: int, is_soft: bool, dealer_rank: str, running_count: int, hand_cards: List[str] = None) -> str:
     if not dealer_rank:
         return "WAIT"
     
@@ -178,39 +178,82 @@ def get_optimal_action(player_total: int, is_soft: bool, dealer_rank: str, runni
     else:
         dv = int(dealer_rank)
 
-    # Illustrious 18 & common deviations for single deck
-    if dealer_rank == "A" and running_count >= 3:
-        return "INSURANCE" # Technically insurance, but we'll flag it
+    # Insurance
+    if running_count >= 3 and dealer_rank == 'A':
+        return "INSURANCE"
 
-    # 16 vs 10
-    if player_total == 16 and dv == 10:
-        if running_count >= 0: return "STAND"
-        return "SURRENDER"
+    # Handling pairs for SPLIT
+    if hand_cards and len(hand_cards) == 2 and hand_cards[0] == hand_cards[1]:
+        rank = hand_cards[0]
+        # Illustrious 18 / Fab 4 / Common SPLIT strategies
+        if rank == 'A' or rank == '8':
+            return "SPLIT"
+        if rank == '10':
+            # TTv5: Split at +5 or higher, stand otherwise
+            if dv == 5 and running_count >= 5: return "SPLIT"
+            # TTv6: Split at +4 or higher, stand otherwise
+            if dv == 6 and running_count >= 4: return "SPLIT"
+            return "STAND"
+        if rank == '9':
+            if dv in [2, 3, 4, 5, 6, 8, 9]: return "SPLIT"
+            return "STAND"
+        if rank == '7' or rank == '2' or rank == '3':
+            if dv <= 7: return "SPLIT"
+        if rank == '6':
+            if dv <= 6: return "SPLIT"
+        if rank == '4':
+            if dv in [5, 6]: return "SPLIT"
+        return "HIT"
+
+    # Standalone Illustrious 18 & Fab 4 deviations for total/soft
+    if player_total == 16:
+        if dv == 10:
+            if running_count >= 0: return "STAND"
+            return "SURRENDER"
+        if dv == 9 and running_count >= 5: return "STAND"
     
-    # 15 vs 10
-    if player_total == 15 and dv == 10:
-        if running_count >= 4: return "STAND"
+    if player_total == 15:
+        if dv == 10:
+            if running_count >= 4: return "STAND"
+            return "SURRENDER"
+        if dv == 9 and running_count >= 2: return "SURRENDER"
+        if dv == 11 and running_count >= 1: return "SURRENDER"
+
+    if player_total == 14 and dv == 10 and running_count >= 3:
         return "SURRENDER"
 
+    if player_total == 13:
+        if dv == 2 and running_count >= -1: return "STAND"
+        if dv == 3 and running_count >= -2: return "STAND"
+
+    if player_total == 12:
+        if dv == 2 and running_count >= 3: return "STAND"
+        if dv == 3 and running_count >= 2: return "STAND"
+        if dv == 4 and running_count >= 0: return "STAND"
+        if dv == 5 and running_count >= -2: return "STAND"
+        if dv == 6 and running_count >= -1: return "STAND"
+
+    if player_total == 11 and dv == 11 and running_count >= 1:
+        return "DOUBLE"
+    
+    if player_total == 10 and dv == 10 and running_count >= 4:
+        return "DOUBLE"
+
+    if player_total == 9:
+        if dv == 2 and running_count >= 1: return "DOUBLE"
+        if dv == 7 and running_count >= 3: return "DOUBLE"
+
+    # Standard Strategy
     if not is_soft:
-        if player_total <= 8: return "HIT"
-        if player_total == 9:
-            return "DOUBLE" if 2 <= dv <= 6 else "HIT"
-        if player_total == 10:
-            return "DOUBLE" if 2 <= dv <= 9 else "HIT"
-        if player_total == 11:
-            return "DOUBLE"
-        if player_total == 12:
-            return "STAND" if 4 <= dv <= 6 else "HIT"
-        if 13 <= player_total <= 16:
-            if player_total == 16 and dv >= 9: return "SURRENDER"
-            if player_total == 15 and dv == 10: return "SURRENDER"
+        if player_total <= 11:
+            return "DOUBLE" if player_total >= 9 else "HIT"
+        if 12 <= player_total <= 16:
             return "STAND" if 2 <= dv <= 6 else "HIT"
         return "STAND"
     else: # Soft totals
-        if player_total <= 17: # A,2 to A,6
+        if player_total <= 17:
             return "DOUBLE" if 3 <= dv <= 6 else "HIT"
-        if player_total == 18: # A,7
+        if player_total == 18:
             if dv <= 6: return "DOUBLE"
             if dv <= 8: return "STAND"
             return "HIT"
@@ -556,7 +599,7 @@ def main() -> None:
 
                     # Strategy Advice
                     if not is_dealer and dealer_upcard_rank:
-                        advice = get_optimal_action(hand_val, is_soft, dealer_upcard_rank, running_hilo_count)
+                        advice = get_optimal_action(hand_val, is_soft, dealer_upcard_rank, running_hilo_count, hand_ranks)
                         cv2.putText(
                             annotated,
                             f"Advice: {advice}",
