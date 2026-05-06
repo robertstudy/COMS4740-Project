@@ -149,7 +149,7 @@ def predict_boxes(model: YOLO, frame, conf: float, max_class_id: int, use_tracki
     return output
 
 
-def draw_overlay(frame, session: AnnotationSession, mode_text: str):
+def draw_overlay(frame, session: AnnotationSession, mode_text: str, captured_count: int):
     overlay = frame.copy()
 
     for i, ann in enumerate(session.annotations):
@@ -187,12 +187,14 @@ def draw_overlay(frame, session: AnnotationSession, mode_text: str):
     if "LIVE" in mode_text:
         info_lines = [
             f"Mode: {mode_text}",
+            f"Captured images: {captured_count}",
             "Predicted ranks are shown next to cards.",
             "Keys: c=capture  Esc=quit",
         ]
     else:
         info_lines = [
             f"Mode: {mode_text}",
+            f"Captured images: {captured_count}",
             f"Current class: [{session.current_class_idx}] {session.class_names[session.current_class_idx]}",
             f"Selected box: {selected_text}",
             "Keys: s=save  r=discard  p=refresh auto  x=delete selected  u=undo  Esc=quit",
@@ -270,6 +272,7 @@ def main() -> None:
     labels_dir = output_root / args.split / "labels"
     images_dir.mkdir(parents=True, exist_ok=True)
     labels_dir.mkdir(parents=True, exist_ok=True)
+    captured_count = len(list(images_dir.glob("card_*.jpg")))
 
     model = None
     if not args.no_auto:
@@ -344,10 +347,10 @@ def main() -> None:
                     session.replace_auto_boxes(state["live_boxes"])
                 else:
                     session.replace_auto_boxes([])
-                shown = draw_overlay(frame, session, "LIVE (press c to capture)")
+                shown = draw_overlay(frame, session, "LIVE (press c to capture)", captured_count)
                 cv2.imshow(window_name, shown)
             else:
-                shown = draw_overlay(state["frozen"], session, "ANNOTATE")
+                shown = draw_overlay(state["frozen"], session, "ANNOTATE", captured_count)
                 cv2.imshow(window_name, shown)
 
             key = cv2.waitKey(1) & 0xFF
@@ -405,6 +408,7 @@ def main() -> None:
                 image_path, label_path = save_sample(state["frozen"], session.annotations, images_dir, labels_dir)
                 print(f"Saved image: {image_path}")
                 print(f"Saved label: {label_path}")
+                captured_count += 1
                 state["frozen"] = None
                 session.reset()
                 continue

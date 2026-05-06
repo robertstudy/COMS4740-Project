@@ -21,8 +21,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--weights",
-        #default="runs/playing_cards_yolo/weights/last.pt",
-        default="runs/playing_cards_yolo/weights/best.pt",
+        #default="runs/playing_cards_yolo/weights/best_supplemental.pt",
+        default="runs/playing_cards_yolo/weights/best_kaggle.pt",
         help="Path to .pt weights (best.pt or last.pt from your run).",
     )
     parser.add_argument(

@@ -3,7 +3,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 from ultralytics import YOLO
@@ -15,7 +15,7 @@ except ImportError as exc:
         "DeepSORT dependency missing. Install with: pip install deep-sort-realtime"
     ) from exc
 
-# python detect_webcam_bigbox_deepsort.py --camera 1
+# python detect_webcam_deepsortV2.py --camera 1
 
 
 def resolve_weights_path(project_root: Path, weights: str) -> Path:
@@ -42,6 +42,8 @@ class MemoryTrack:
     bbox: Tuple[int, int, int, int]
     missing_frames: int = 0
     occluded: bool = False
+    last_seen_frame: int = 0
+    first_seen_frame: int = 0
 
 
 def box_intersects(
@@ -110,6 +112,68 @@ def big_box_from_pair(
     y2 = max(0, min(frame_h - 1, y2))
     return x1, y1, x2, y2
 
+
+def bbox_iou(
+    a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]
+) -> float:
+    ax1, ay1, ax2, ay2 = a
+    bx1, by1, bx2, by2 = b
+    ix1 = max(ax1, bx1)
+    iy1 = max(ay1, by1)
+    ix2 = min(ax2, bx2)
+    iy2 = min(ay2, by2)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = float((ix2 - ix1) * (iy2 - iy1))
+    area_a = float(max(1, ax2 - ax1) * max(1, ay2 - ay1))
+    area_b = float(max(1, bx2 - bx1) * max(1, by2 - by1))
+    return inter / max(1.0, area_a + area_b - inter)
+
+
+def bbox_center(b: Tuple[int, int, int, int]) -> Tuple[float, float]:
+    x1, y1, x2, y2 = b
+    return (x1 + x2) * 0.5, (y1 + y2) * 0.5
+
+
+def center_distance(
+    a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]
+) -> float:
+    ax, ay = bbox_center(a)
+    bx, by = bbox_center(b)
+    dx = ax - bx
+    dy = ay - by
+    return (dx * dx + dy * dy) ** 0.5
+
+
+def best_pair_for_track(
+    available: List[CornerDetection],
+    track_bbox: Tuple[int, int, int, int],
+    frame_shape: Tuple[int, int, int],
+) -> Optional[Tuple[int, int]]:
+    best_score = -1.0
+    best_pair: Optional[Tuple[int, int]] = None
+    frame_diag = (frame_shape[0] * frame_shape[0] + frame_shape[1] * frame_shape[1]) ** 0.5
+    for i in range(len(available)):
+        for j in range(i + 1, len(available)):
+            candidate_bbox = big_box_from_pair(available[i], available[j], frame_shape)
+            iou = bbox_iou(candidate_bbox, track_bbox)
+            dist_norm = center_distance(candidate_bbox, track_bbox) / max(1.0, frame_diag)
+            # Prefer high overlap; distance is a tie-breaker.
+            score = iou - (0.35 * dist_norm)
+            if score > best_score:
+                best_score = score
+                best_pair = (i, j)
+    if best_pair is None:
+        return None
+    # Keep assignment conservative so we don't cross-pair two identical cards far apart.
+    i, j = best_pair
+    candidate_bbox = big_box_from_pair(available[i], available[j], frame_shape)
+    if bbox_iou(candidate_bbox, track_bbox) <= 0.0 and center_distance(candidate_bbox, track_bbox) > (
+        0.25 * frame_diag
+    ):
+        return None
+    return best_pair
+
 def create_player_box(
         track_ids: set[int], memory_tracks: List[MemoryTrack], frame_shape: Tuple[int, int, int]
 ) -> Tuple[int, int, int, int]:
@@ -122,16 +186,64 @@ def create_player_box(
         y2 = max(y2, card.bbox[3])
     return x1, y1, x2, y2
 
-def pair_same_class_boxes(corners: List[CornerDetection]) -> List[Tuple[CornerDetection, CornerDetection]]:
+def pair_same_class_boxes(
+    corners: List[CornerDetection],
+    memory_tracks: Dict[int, MemoryTrack],
+    frame_shape: Tuple[int, int, int],
+    frame_idx: int,
+    max_track_stale_frames: int = 10,
+) -> List[Tuple[CornerDetection, CornerDetection]]:
     by_class: Dict[int, List[CornerDetection]] = {}
     for det in corners:
         by_class.setdefault(det.class_id, []).append(det)
 
     pairs: List[Tuple[CornerDetection, CornerDetection]] = []
     for class_corners in by_class.values():
-        ordered = sorted(class_corners, key=lambda d: d.conf, reverse=True)
-        for i in range(0, len(ordered) - 1, 2):
-            pairs.append((ordered[i], ordered[i + 1]))
+        if len(class_corners) < 2:
+            continue
+
+        available = list(class_corners)
+        label = class_corners[0].label
+        recent_tracks = [
+            track
+            for track in memory_tracks.values()
+            if track.label == label and (frame_idx - track.last_seen_frame) <= max_track_stale_frames
+        ]
+        # Older tracks first so recently-created IDs don't steal pairing from stable cards.
+        recent_tracks.sort(key=lambda t: (t.first_seen_frame, t.track_id))
+
+        for track in recent_tracks:
+            if len(available) < 2:
+                break
+            pair_idx = best_pair_for_track(available, track.bbox, frame_shape)
+            if pair_idx is None:
+                continue
+            i, j = pair_idx
+            d1 = available[i]
+            d2 = available[j]
+            pairs.append((d1, d2))
+            for idx in sorted((i, j), reverse=True):
+                del available[idx]
+
+        # Pair any remaining detections by nearest-neighbor center distance.
+        while len(available) >= 2:
+            best_i = 0
+            best_j = 1
+            best_dist = float("inf")
+            for i in range(len(available)):
+                for j in range(i + 1, len(available)):
+                    d1 = available[i]
+                    d2 = available[j]
+                    d = center_distance(d1.bbox, d2.bbox)
+                    if d < best_dist:
+                        best_dist = d
+                        best_i = i
+                        best_j = j
+            d1 = available[best_i]
+            d2 = available[best_j]
+            pairs.append((d1, d2))
+            for idx in sorted((best_i, best_j), reverse=True):
+                del available[idx]
 
     return pairs
 
@@ -358,9 +470,6 @@ def main() -> None:
     print("Press 'q' in the preview window to quit.\n")
     memory_tracks: Dict[int, MemoryTrack] = {}
     players: List[set[int]] = []
-    
-    running_hilo_count = 0
-    counted_ids = set()
 
     try:
         while True:
@@ -383,7 +492,12 @@ def main() -> None:
                 class_names = {i: name for i, name in enumerate(raw_names)}
 
             corners = extract_corner_detections(results[0], class_names)
-            pairs = pair_same_class_boxes(corners)
+            pairs = pair_same_class_boxes(
+                corners=corners,
+                memory_tracks=memory_tracks,
+                frame_shape=frame.shape,
+                frame_idx=frame_idx,
+            )
 
             detections_for_tracker = []
             for d1, d2 in pairs:
@@ -412,6 +526,8 @@ def main() -> None:
                         bbox=current_bbox,
                         missing_frames=0,
                         occluded=False,
+                        last_seen_frame=frame_idx,
+                        first_seen_frame=frame_idx,
                     )
                     continue
 
@@ -435,6 +551,8 @@ def main() -> None:
                     bbox=anchored_bbox,
                     missing_frames=0,
                     occluded=occluded,
+                    last_seen_frame=frame_idx,
+                    first_seen_frame=existing.first_seen_frame,
                 )
 
             for track_id in list(memory_tracks.keys()):
@@ -574,9 +692,6 @@ def main() -> None:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     break
-                elif key == ord("r"):
-                    running_hilo_count = 0
-                    counted_ids.clear()
     except KeyboardInterrupt:
         print("\nStopped.")
     except Exception as e:
